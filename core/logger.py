@@ -11,7 +11,12 @@ class Logger:
         
         # Save stdout and stderr for redirection
         self.stdout = sys.stdout
+        self.stdout = sys.stdout
         self.stderr = sys.stderr
+        self._need_timestamp = True
+
+    def log(self, message):
+        self.write(message + "\n")
         
     def write(self, message):
         if not message:

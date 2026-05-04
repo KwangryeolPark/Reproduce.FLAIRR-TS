@@ -1,31 +1,35 @@
 import argparse
 import os
-import sys
+import torch
 import numpy as np
 import pandas as pd
+from tqdm import tqdm
+from datetime import datetime
+
 from core.data_factory import data_provider
 from core.agents import LLMClient, RetrievalAgent, ForecasterAgent, RefinerAgent
-from core.logger import setup_exp_dir, Logger
-from tqdm import tqdm
+from core.logger import Logger
+
+def setup_exp_dir(args):
+    now = datetime.now().strftime("%Y%m%d_%H%M%S")
+    model_name = args.model.split('/')[-1].replace(':', '_')
+    exp_name = f"{args.data}_{model_name}_{now}"
+    exp_dir = os.path.join("results", exp_name)
+    os.makedirs(exp_dir, exist_ok=True)
+    return exp_dir
 
 def calculate_mae(predicted, actual):
-    if predicted is None or actual is None:
+    if not predicted or len(predicted) == 0:
         return float('inf')
-    if len(predicted) == 0 or len(actual) == 0 or len(predicted) != len(actual):
-        return float('inf')
-    return np.mean(np.abs(np.array(predicted) - np.array(actual)))
+    actual_truncated = actual[:len(predicted)]
+    return np.mean(np.abs(np.array(predicted) - np.array(actual_truncated)))
 
-def main(args):
+def main(args, initial_instructions=""):
     # 0. Setup Experiment Directory and Logger
     exp_dir = setup_exp_dir(args)
     logger = Logger(exp_dir)
+    logger.log(f"Starting Experiment: {exp_dir}")
     
-    # Redirect stdout and stderr to the logger
-    sys.stdout = logger
-    sys.stderr = logger
-    
-    print(f"Starting Experiment: {exp_dir}")
-
     # 1. Initialize Agents
     client = LLMClient(model_name=args.model)
     retriever = RetrievalAgent(M=args.raft_m)
@@ -40,82 +44,126 @@ def main(args):
         os.path.join(args.prompt_root, "refiner/synthesizer_system.txt")
     )
 
-    # 2. Load Data
+    # 2. Load Data (Correct Split: Train, Val, Test)
     train_data = data_provider(args, flag='train')
+    val_data = data_provider(args, flag='val')
     test_data = data_provider(args, flag='test')
     X_train_all = train_data.data_x
     
-    # 3. FLAIRR-TS Iterative Loop
-    sample_indices = np.random.choice(len(test_data), args.sample_size, replace=False)
-    
-    current_instructions = ""
+    # 3. ACL Loop (Training Phase on Validation Set)
+    current_instructions = initial_instructions
     history = []
-    
-    best_instructions = ""
+    best_instructions = initial_instructions
     min_overall_mae = float('inf')
 
-    for it in range(args.max_iter):
-        print(f"\n--- Iteration {it + 1} ---")
+    # Calculate total windows in Validation set
+    total_val_windows = len(val_data)
+    
+    skip_acl = False
+    if args.test is not None and args.test != "auto":
+        # Load prompt from specified path
+        if os.path.exists(args.test):
+            with open(args.test, 'r') as f:
+                best_instructions = f.read().strip()
+            print(f"Skipping ACL loop. Loaded best prompt from: {args.test}")
+            skip_acl = True
+        else:
+            print(f"Warning: Test prompt path '{args.test}' not found. Starting ACL loop anyway.")
+
+    if not skip_acl:
+        # Determine sample size for training phase
+        if str(args.sample_size).lower() == 'all':
+            train_sample_size = total_val_windows
+        else:
+            train_sample_size = min(int(args.sample_size), total_val_windows)
+
+        print(f"Starting ACL loop (Training on VAL) for {args.it} iterations with sample_size={train_sample_size}")
         
-        batch_results = []
-        total_mae = 0
-        
-        for idx in tqdm(sample_indices, desc="Processing Samples"):
-            seq_x, seq_y = test_data[idx]
-            actual_y = seq_y[args.label_len : args.label_len + args.pred_len].flatten()
+        for iteration in range(1, args.it + 1):
+            print(f"\n--- Iteration {iteration} (ACL on Validation Set) ---")
+            batch_results = []
+            total_mae = 0
             
-            # Retrieval
-            retrieved = retriever.retrieve(X_train_all, seq_x)
+            # Pick random samples from VALIDATION set for refinement
+            indices = np.random.choice(total_val_windows, train_sample_size, replace=False)
             
-            # Forecast
-            response = forecaster.forecast(args, seq_x, retrieved, current_instructions, logger=logger)
-            preds = forecaster.parse_predictions(response, args.pred_len)
+            for idx in tqdm(indices, desc=f"ACL Processing (Val)"):
+                seq_x, seq_y = val_data[idx]
+                actual_y = seq_y[args.label_len : args.label_len + args.pred_len].flatten()
+                
+                # RAFT Retrieval remains from Training set
+                retrieved = retriever.retrieve(X_train_all, seq_x)
+                
+                # Forecast
+                response = forecaster.forecast(args, seq_x, retrieved, current_instructions, logger=logger)
+                preds = forecaster.parse_predictions(response, args.pred_len)
+                
+                mae = calculate_mae(preds, actual_y)
+                total_mae += mae
+                
+                batch_results.append({
+                    "predictions": preds,
+                    "ground_truth": actual_y.tolist(),
+                    "mae": mae
+                })
+                
+            avg_mae = total_mae / train_sample_size
+            print(f"Validation Average MAE: {avg_mae:.4f}")
             
-            # Calculate MAE
-            mae = calculate_mae(preds, actual_y)
-            total_mae += mae
-            
-            batch_results.append({
-                "predictions": preds,
-                "ground_truth": actual_y.tolist(),
-                "mae": mae
+            history.append({
+                "instructions": current_instructions,
+                "mae": avg_mae
             })
             
-        avg_mae = total_mae / len(sample_indices)
-        print(f"Average MAE: {avg_mae:.4f}")
-        
-        history.append({
-            "instructions": current_instructions,
-            "mae": avg_mae
-        })
-        
-        if avg_mae < min_overall_mae:
-            min_overall_mae = avg_mae
-            best_instructions = current_instructions
+            if avg_mae < min_overall_mae:
+                min_overall_mae = avg_mae
+                best_instructions = current_instructions
+                with open(os.path.join(exp_dir, "best_instructions.txt"), "w") as f:
+                    f.write(best_instructions)
+                print(f"New best prompt saved to {exp_dir}")
+                
+            # Refinement (ACL)
+            learnings, next_instructions, done = refiner.refine(
+                iteration, current_instructions, history, batch_results, logger=logger
+            )
             
-        # Refinement
-        learnings, next_instructions, done = refiner.refine(
-            it + 1, current_instructions, history, batch_results, logger=logger
-        )
-        
-        print(f"Learnings: {learnings[:100]}...")
-        print(f"Done: {done}")
-        
-        if done:
-            break
-            
-        current_instructions = next_instructions
+            if done:
+                print("Stopping early due to convergence.")
+                break
+            current_instructions = next_instructions
 
-    print("\n" + "="*30)
-    print("Optimization Finished")
-    print(f"Best MAE: {min_overall_mae:.4f}")
-    print(f"Best Instructions: {best_instructions}")
-    print("="*30)
+    # 4. Final Evaluation (Test Phase on Full Test Set)
+    if args.test is not None:
+        total_test_windows = len(test_data)
+        print("\n" + "="*30)
+        print("Starting Final Evaluation on Full TEST Set")
+        print(f"Using Best Instructions found on Validation Set.")
+        print("="*30)
+        
+        final_total_mae = 0
+        test_indices = range(total_test_windows)
+        
+        for idx in tqdm(test_indices, desc="Final Testing (Full Test Set)"):
+            seq_x, seq_y = test_data[idx]
+            actual_y = seq_y[args.label_len : args.label_len + args.pred_len].flatten()
+            retrieved = retriever.retrieve(X_train_all, seq_x)
+            
+            # Use BEST prompt from Val set to predict Test set
+            response = forecaster.forecast(args, seq_x, retrieved, best_instructions, logger=None)
+            preds = forecaster.parse_predictions(response, args.pred_len)
+            
+            mae = calculate_mae(preds, actual_y)
+            final_total_mae += mae
+
+        final_avg_mae = final_total_mae / total_test_windows
+        print(f"\nFinal Test Set MAE: {final_avg_mae:.4f}")
+        
+        pd.DataFrame([{"final_test_mae": final_avg_mae}]).to_csv(os.path.join(exp_dir, "final_metric.csv"), index=False)
     
-    # 3.3 Save metric.csv
-    metric_df = pd.DataFrame([{"mae": min_overall_mae}])
-    metric_df.to_csv(os.path.join(exp_dir, "metric.csv"), index=False)
-    print(f"Metrics saved to {os.path.join(exp_dir, 'metric.csv')}")
+    print("\n" + "="*30)
+    print(f"Experiment Finished.")
+    print(f"Best Instructions Location: {os.path.join(exp_dir, 'best_instructions.txt')}")
+    print("="*30)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='FLAIRR-TS: Forecasting LLM-Agents with Iterative Refinement and Retrieval')
@@ -137,29 +185,29 @@ if __name__ == "__main__":
     parser.add_argument('--model', type=str, default='deepseek-r1:latest', help='Ollama model name')
     parser.add_argument('--max_iter', type=int, default=5, help='ts_max_iter')
     parser.add_argument('--tau_stop', type=float, default=0.05, help='ts_stopping_criteria')
-    parser.add_argument('--sample_size', type=int, default=3, help='ts_sample_size')
+    parser.add_argument('--sample_size', type=str, default='3', help='ts_sample_size (Training Batch)')
     parser.add_argument('--raft_m', type=int, default=2, help='raft_m_retrieval')
     parser.add_argument('--prompt_root', type=str, default='./agent-promps/', help='root of prompt templates')
+    
+    # Evaluation Phase
+    parser.add_argument('--test', type=str, nargs='?', const='auto', default=None, 
+                        help='Enable testing. If path provided, loads that prompt. Otherwise uses best from Val set.')
     
     # iTransformer compatibility
     parser.add_argument('--embed', type=str, default='timeF', help='time features encoding')
     parser.add_argument('--batch_size', type=int, default=32, help='batch size of train input data')
     parser.add_argument('--it', type=int, default=3, help='number of iterations')
-    parser.add_argument('--prompt_type', type=str, default='base', help='Initial prompt strategy from library (e.g., dungeon-master)')
+    parser.add_argument('--prompt_type', type=str, default='base', help='Initial prompt strategy (e.g., dungeon-master)')
 
     args = parser.parse_args()
 
-    # Load initial instructions from library if specified
     initial_instructions = ""
     if args.prompt_type != 'base':
         library_path = os.path.join('agent-promps', 'library', f"{args.prompt_type}.txt")
         if os.path.exists(library_path):
             with open(library_path, 'r') as f:
                 initial_instructions = f.read().strip()
-                # Replace placeholder {prediction_length} if present
                 initial_instructions = initial_instructions.replace("{prediction_length}", str(args.pred_len))
             print(f"Loaded initial ACL strategy: {args.prompt_type}")
-        else:
-            print(f"Warning: Prompt strategy '{args.prompt_type}' not found in library. Using empty instructions.")
 
     main(args, initial_instructions)
