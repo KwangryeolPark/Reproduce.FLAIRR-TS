@@ -1,0 +1,13 @@
+torch<2.11
+numpy<2.0
+pandas
+scikit-learn
+matplotlib
+ipywidgets
+ipykernel
+tqdm
+scipy
+openpyxl
+openai
+python-dotenv
+PyYAML
