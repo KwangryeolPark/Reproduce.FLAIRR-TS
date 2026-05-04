@@ -1,4 +1,7 @@
 results/
+dataset/
+paper/
+repositories/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

@@ -9,7 +9,9 @@ from core.logger import setup_exp_dir, Logger
 from tqdm import tqdm
 
 def calculate_mae(predicted, actual):
-    if not predicted or not actual or len(predicted) != len(actual):
+    if predicted is None or actual is None:
+        return float('inf')
+    if len(predicted) == 0 or len(actual) == 0 or len(predicted) != len(actual):
         return float('inf')
     return np.mean(np.abs(np.array(predicted) - np.array(actual)))
 
@@ -67,7 +69,7 @@ def main(args):
             
             # Forecast
             response = forecaster.forecast(args, seq_x, retrieved, current_instructions, logger=logger)
-            preds = forecaster.parse_predictions(response)
+            preds = forecaster.parse_predictions(response, args.pred_len)
             
             # Calculate MAE
             mae = calculate_mae(preds, actual_y)

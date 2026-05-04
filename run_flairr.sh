@@ -5,7 +5,7 @@ fi
 
 # Default parameters
 DATA=${1:-ETTh1}
-MODEL=${2:-deepseek-r1:latest}
+MODEL=${2:-deepseek-r1:32b}
 
 python main.py \
     --data $DATA \

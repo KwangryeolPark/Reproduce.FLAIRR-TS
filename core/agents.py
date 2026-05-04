@@ -5,6 +5,11 @@ import numpy as np
 from openai import OpenAI
 from dotenv import load_dotenv
 
+# Use aggressive flush for real-time visibility
+def flush_print(text):
+    sys.stdout.write(text)
+    sys.stdout.flush()
+
 load_dotenv()
 
 class LLMClient:
@@ -15,14 +20,13 @@ class LLMClient:
             api_key="ollama" # dummy key for ollama
         )
 
-    def generate(self, system_prompt, user_prompt, temperature=0.0, max_tokens=2048):
+    def generate(self, system_prompt, user_prompt, temperature=0.0, max_tokens=4096):
         # Create a summarized version of the prompt for terminal output
         display_prompt = user_prompt
-        if len(user_prompt) > 1000:
-            display_prompt = user_prompt[:500] + "\n... [Data Truncated for Display] ...\n" + user_prompt[-500:]
+        if len(user_prompt) > 2000:
+            display_prompt = user_prompt[:1000] + "\n... [Data Truncated for Display] ...\n" + user_prompt[-1000:]
             
-        sys.stdout.write(f"\n[User Input (Summarized)]:\n{display_prompt}\n")
-        sys.stdout.flush()
+        flush_print(f"\n[User Input (Summarized)]:\n{display_prompt}\n")
         
         response = self.client.chat.completions.create(
             model=self.model_name,
@@ -42,40 +46,40 @@ class LLMClient:
         for chunk in response:
             delta = chunk.choices[0].delta
             
+            # 1. Handle separate reasoning content
             if hasattr(delta, 'reasoning_content') and delta.reasoning_content:
                 if not is_thinking:
-                    sys.stdout.write("\n[Thinking Process]\n")
+                    flush_print("\n[Thinking Process]\n")
                     is_thinking = True
                 reasoning = delta.reasoning_content
                 full_response += reasoning
-                sys.stdout.write(reasoning)
-                sys.stdout.flush()
+                flush_print(reasoning)
                 
+            # 2. Handle content
             elif delta.content:
                 content = delta.content
+                
                 if "<think>" in content and not is_thinking:
-                    sys.stdout.write("\n[Thinking Process]\n")
+                    flush_print("\n[Thinking Process]\n")
                     is_thinking = True
                     clean_content = content.replace("<think>", "")
                     if clean_content:
-                        sys.stdout.write(clean_content)
-                        sys.stdout.flush()
+                        flush_print(clean_content)
                 elif "</think>" in content:
                     clean_content = content.replace("</think>", "")
-                    sys.stdout.write(clean_content)
-                    sys.stdout.write("\n\n[Final Answer]\n")
-                    sys.stdout.flush()
+                    flush_print(clean_content)
+                    flush_print("\n\n[Final Answer]\n")
                     is_thinking = False
                     has_started_answer = True
                 else:
                     if not is_thinking and not has_started_answer:
-                        sys.stdout.write("\n[Answer]\n")
+                        flush_print("\n[Answer]\n")
                         has_started_answer = True
-                    sys.stdout.write(content)
-                    sys.stdout.flush()
+                    flush_print(content)
+                
                 full_response += content
         
-        sys.stdout.write("\n")
+        flush_print("\n")
         return full_response
 
 class RetrievalAgent:
@@ -134,20 +138,29 @@ class ForecasterAgent:
             previous_data=",".join([f"{v:.4f}" for v in current_window.flatten()])
         )
         
-        # Use 1536 as a strict but sufficient limit for 96 predictions + reasoning
-        response = self.client.generate("You are a helpful forecasting assistant.", user_prompt, temperature=0.0, max_tokens=1536)
+        # Increase max_tokens for 32B model to handle long reasoning + predictions
+        response = self.client.generate("You are a helpful forecasting assistant.", user_prompt, temperature=0.0, max_tokens=4096)
+        
         if logger:
             logger.log_agent("Forecaster", user_prompt, response)
+            
         return response
 
-    def parse_predictions(self, response_text):
+    def parse_predictions(self, response_text, pred_len):
         clean_text = re.sub(r"<think>.*?</think>", "", response_text, flags=re.DOTALL)
-        match = re.search(r"Predicted Values:\s*\[(.*?)\]", clean_text, re.DOTALL)
+        
+        # Robust parsing: try to find anything after Predicted Values: [
+        match = re.search(r"Predicted Values:\s*\[(.*?)(\]|(\n|$))", clean_text, re.DOTALL)
         if match:
             values_str = match.group(1)
-            cleaned_str = re.sub(r'[^0-9,.\-]', '', values_str)
+            # Remove any non-numeric chars except separators
+            cleaned_str = re.sub(r'[^0-9,.\-]', ' ', values_str)
+            # Split by any whitespace or comma
+            parts = re.split(r'[,\s]+', cleaned_str)
             try:
-                return [float(v.strip()) for v in cleaned_str.split(',') if v.strip()]
+                values = [float(p) for p in parts if p.strip()]
+                # Truncate to pred_len
+                return values[:pred_len]
             except ValueError:
                 return []
         return []
@@ -161,14 +174,20 @@ class RefinerAgent:
             self.synthesizer_system_prompt = f.read()
 
     def refine(self, iteration, current_instructions, history, samples, logger=None):
-        history_str = "\n".join([f"Iter {i}: MAE={h['mae']:.4f}, Instructions: {h['instructions']}" for i, h in enumerate(history)])
+        history_str = "\n".join([f"Iter {i+1}: MAE={h['mae']:.4f}, Instructions: {h['instructions']}" for i, h in enumerate(history)])
+        
         samples_str = ""
         for i, s in enumerate(samples):
             samples_str += f"Sample {i+1}:\nPredictions: {s['predictions']}\nGround Truth: {s['ground_truth']}\n\n"
         
         user_prompt = f"Iteration {iteration}\nHistory:\n{history_str}\n\nDetailed Samples:\n{samples_str}"
-        refiner_system = self.refiner_system_prompt.format(it=iteration-1, current_instructions_under_review=current_instructions, mae_to_report_to_teacher=history[-1]['mae'])
-        refiner_output = self.client.generate(refiner_system, user_prompt, temperature=0.3, max_tokens=2048)
+        
+        refiner_system = self.refiner_system_prompt.format(
+            it_plus_1=iteration, 
+            current_instructions_under_review=current_instructions, 
+            mae_to_report_to_teacher=history[-1]['mae'] if history else 0.0
+        )
+        refiner_output = self.client.generate(refiner_system, user_prompt, temperature=0.3, max_tokens=4096)
         
         if logger:
             logger.log_agent("Refiner", user_prompt, refiner_output)
@@ -183,9 +202,11 @@ class RefinerAgent:
         if not done:
             synthesizer_user_prompt = f"Learnings you received:\n{learnings}"
             synthesizer_system = self.synthesizer_system_prompt.format(current_learnings=learnings)
-            refined_instructions = self.client.generate(synthesizer_system, synthesizer_user_prompt, temperature=0.3, max_tokens=2048)
+            refined_instructions = self.client.generate(synthesizer_system, synthesizer_user_prompt, temperature=0.3, max_tokens=4096)
+            
             if logger:
                 logger.log_agent("Synthesizer", synthesizer_user_prompt, refined_instructions)
+            
             refined_instructions = re.sub(r"<think>.*?</think>", "", refined_instructions, flags=re.DOTALL)
             refined_instructions = refined_instructions.replace("Refined Prompt Forecasting Instructions:", "").strip()
         else:
