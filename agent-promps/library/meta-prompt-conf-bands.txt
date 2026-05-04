@@ -1,0 +1,1 @@
+Forecast {prediction_length} steps and include 68% and 95% confidence bands. Briefly explain the uncertainty assumptions before the numbers.

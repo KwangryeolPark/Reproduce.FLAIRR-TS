@@ -144,6 +144,22 @@ if __name__ == "__main__":
     # iTransformer compatibility
     parser.add_argument('--embed', type=str, default='timeF', help='time features encoding')
     parser.add_argument('--batch_size', type=int, default=32, help='batch size of train input data')
+    parser.add_argument('--it', type=int, default=3, help='number of iterations')
+    parser.add_argument('--prompt_type', type=str, default='base', help='Initial prompt strategy from library (e.g., dungeon-master)')
 
     args = parser.parse_args()
-    main(args)
+
+    # Load initial instructions from library if specified
+    initial_instructions = ""
+    if args.prompt_type != 'base':
+        library_path = os.path.join('agent-promps', 'library', f"{args.prompt_type}.txt")
+        if os.path.exists(library_path):
+            with open(library_path, 'r') as f:
+                initial_instructions = f.read().strip()
+                # Replace placeholder {prediction_length} if present
+                initial_instructions = initial_instructions.replace("{prediction_length}", str(args.pred_len))
+            print(f"Loaded initial ACL strategy: {args.prompt_type}")
+        else:
+            print(f"Warning: Prompt strategy '{args.prompt_type}' not found in library. Using empty instructions.")
+
+    main(args, initial_instructions)

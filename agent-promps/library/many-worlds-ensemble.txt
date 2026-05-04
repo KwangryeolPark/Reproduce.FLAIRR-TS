@@ -1,0 +1,1 @@
+Create forecasts for four parallel universes (A–D) shifted by −2σ, −1σ, +1σ, +2σ, each {prediction_length} steps long, then provide a consensus median forecast.

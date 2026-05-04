@@ -1,0 +1,3 @@
+ACT I — REFINER AGENT Propose a first-pass forecast for the next {prediction_length} steps.
+ACT II — FORECASTER AGENT Evaluate the Refiner’s forecast against the most recent known data and suggest corrections.
+ACT III — REFINER AGENT Incorporate feedback and provide the refined forecast.

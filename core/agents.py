@@ -20,11 +20,14 @@ class LLMClient:
             api_key="ollama" # dummy key for ollama
         )
 
-    def generate(self, system_prompt, user_prompt, temperature=0.0, max_tokens=4096):
+    def generate(self, system_prompt, user_prompt, temperature=0.0, max_tokens=16384):
+        # Print System Prompt for better debugging and ACL visibility
+        flush_print(f"\n[System Prompt]:\n{system_prompt}\n")
+        
         # Create a summarized version of the prompt for terminal output
         display_prompt = user_prompt
-        if len(user_prompt) > 2000:
-            display_prompt = user_prompt[:1000] + "\n... [Data Truncated for Display] ...\n" + user_prompt[-1000:]
+        if len(user_prompt) > 4000:
+            display_prompt = user_prompt[:2000] + "\n... [Data Truncated for Display] ...\n" + user_prompt[-2000:]
             
         flush_print(f"\n[User Input (Summarized)]:\n{display_prompt}\n")
         
@@ -125,6 +128,7 @@ class ForecasterAgent:
             retrieved_segments_data=raft_segments_str
         )
         
+        # Exact Appendix D logic: "If instructions: Forecasting Instructions: {instructions}"
         instructions_block = f"Forecasting Instructions: {instructions}" if instructions else ""
         
         user_prompt = self.base_prompt_template.format(
@@ -134,12 +138,10 @@ class ForecasterAgent:
             prediction_length=args.pred_len,
             instructions_block=instructions_block,
             raft_context_block=raft_context_block,
-            previous_sequence_length_data=f"{args.seq_len} steps",
             previous_data=",".join([f"{v:.4f}" for v in current_window.flatten()])
         )
         
-        # Increase max_tokens for 32B model to handle long reasoning + predictions
-        response = self.client.generate("You are a helpful forecasting assistant.", user_prompt, temperature=0.0, max_tokens=4096)
+        response = self.client.generate("You are a helpful forecasting assistant.", user_prompt, temperature=0.0, max_tokens=16384)
         
         if logger:
             logger.log_agent("Forecaster", user_prompt, response)
@@ -148,18 +150,13 @@ class ForecasterAgent:
 
     def parse_predictions(self, response_text, pred_len):
         clean_text = re.sub(r"<think>.*?</think>", "", response_text, flags=re.DOTALL)
-        
-        # Robust parsing: try to find anything after Predicted Values: [
         match = re.search(r"Predicted Values:\s*\[(.*?)(\]|(\n|$))", clean_text, re.DOTALL)
         if match:
             values_str = match.group(1)
-            # Remove any non-numeric chars except separators
             cleaned_str = re.sub(r'[^0-9,.\-]', ' ', values_str)
-            # Split by any whitespace or comma
             parts = re.split(r'[,\s]+', cleaned_str)
             try:
                 values = [float(p) for p in parts if p.strip()]
-                # Truncate to pred_len
                 return values[:pred_len]
             except ValueError:
                 return []
@@ -175,19 +172,17 @@ class RefinerAgent:
 
     def refine(self, iteration, current_instructions, history, samples, logger=None):
         history_str = "\n".join([f"Iter {i+1}: MAE={h['mae']:.4f}, Instructions: {h['instructions']}" for i, h in enumerate(history)])
-        
         samples_str = ""
         for i, s in enumerate(samples):
             samples_str += f"Sample {i+1}:\nPredictions: {s['predictions']}\nGround Truth: {s['ground_truth']}\n\n"
         
         user_prompt = f"Iteration {iteration}\nHistory:\n{history_str}\n\nDetailed Samples:\n{samples_str}"
-        
         refiner_system = self.refiner_system_prompt.format(
             it_plus_1=iteration, 
             current_instructions_under_review=current_instructions, 
             mae_to_report_to_teacher=history[-1]['mae'] if history else 0.0
         )
-        refiner_output = self.client.generate(refiner_system, user_prompt, temperature=0.3, max_tokens=4096)
+        refiner_output = self.client.generate(refiner_system, user_prompt, temperature=0.3, max_tokens=8192)
         
         if logger:
             logger.log_agent("Refiner", user_prompt, refiner_output)

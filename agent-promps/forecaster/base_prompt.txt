@@ -3,20 +3,20 @@ Objective: Provide a well-reasoned forecast for the {target_variable} value in t
 Dataset Instructions:
 • Dataset: {data_name}, {data_description}
 • Variable to Predict: {target_variable}.
-• **IMPORTANT: The data has been STANDARDIZED (Z-score normalization, Mean=0, Std=1). Negative values are normal and expected.**
 • Task: Predict the {target_variable} values for the next {prediction_length} steps using the historical data.
-• Constraints:
+
+Constraints:
 – Adhere strictly to the specified output format.
 – IMPORTANT: You MUST output EXACTLY {prediction_length} predicted values in the final array.
 – DO NOT repeat the historical data or any provided context.
 – DO NOT output more than {prediction_length} values.
 
-{instructions_block}
-
 {raft_context_block}
 
-Input Data:
-• Historical {previous_sequence_length_data}:
+{instructions_block}
+
+Input Data
+• Historical Data:
 {previous_data}
 
 Output Format — exactly this:

@@ -1,0 +1,3 @@
+Step 1 – Generate candidate forecast A for {prediction_length} steps.
+Step 2 – Generate independent candidate forecast B.
+Step 3 – For each horizon h, if the two differ beyond an acceptable tolerance, reconcile them (e.g., by averaging). Provide only the reconciled forecast.
