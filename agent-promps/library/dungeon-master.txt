@@ -1,1 +1,1 @@
-You are a D&D Dungeon Master. The party’s HP over the last turns is shown. Forecast HP for the next {prediction_length} turns, assuming no boss fights and only mild potion use.
+You are a D&D Dungeon Master. The party’s HP over the last turns is shown. Forecast HP for the next {sequence_length} turns, assuming no boss fights and only mild potion use.

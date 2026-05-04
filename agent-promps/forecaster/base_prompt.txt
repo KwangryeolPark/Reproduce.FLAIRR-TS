@@ -1,26 +1,24 @@
-Objective: Provide a well-reasoned forecast for the {target_variable} value in the next row of the dataset, given the historical data.
+Objective
+Provide a well-reasoned forecast for the {target_variable} value in the next row of the dataset, given the historical data.
 
-Dataset Instructions:
-• Dataset: {data_name}, {data_description}
-• Variable to Predict: {target_variable}.
-• Task: Predict the {target_variable} values for the next {prediction_length} steps using the historical data.
+Dataset Instructions
+* Dataset: {data_name}, {data_description}
+* Variable to Predict: {target_variable}.
+* Task: Predict the {target_variable} values for the next {prediction_length} steps using the historical data.
 
 Constraints:
-– Adhere strictly to the specified output format.
-– IMPORTANT: You MUST output EXACTLY {prediction_length} predicted values in the final array.
-– DO NOT repeat the historical data or any provided context.
-– DO NOT output more than {prediction_length} values.
-
-{raft_context_block}
+- Adhere strictly to the specified output format.
 
 {instructions_block}
 
+{raft_context_block}
+
 Input Data
-• Historical Data:
+* Historical Data:
 {previous_data}
 
-Output Format — exactly this:
-Reasoning: [Your detailed analysis of the patterns, trends, and RAFT analogs. Keep it concise but insightful.]
-Certainty Estimate: [0-100]%
-Certainty Reasoning: [Brief explanation]
-Predicted Values: [val1, val2, ..., val{prediction_length}]
+Output Format - exactly this
+Reasoning: [Your detailed reasoning]
+Certainty Estimate: [Percentage certainty]
+Certainty Reasoning: [reasoning]
+Predicted Values: [predicted_value_1, ...]

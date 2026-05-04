@@ -24,12 +24,20 @@ class LLMClient:
         # Print System Prompt for better debugging and ACL visibility
         flush_print(f"\n[System Prompt]:\n{system_prompt}\n")
         
-        # Create a summarized version of the prompt for terminal output
+        # Show start, end, and middle (where instructions usually are)
         display_prompt = user_prompt
         if len(user_prompt) > 4000:
-            display_prompt = user_prompt[:2000] + "\n... [Data Truncated for Display] ...\n" + user_prompt[-2000:]
+            half = 1500
+            mid = len(user_prompt) // 2
+            display_prompt = (
+                user_prompt[:half] + 
+                "\n... [Data Truncated] ...\n" + 
+                user_prompt[mid-500:mid+500] + 
+                "\n... [Data Truncated] ...\n" + 
+                user_prompt[-half:]
+            )
             
-        flush_print(f"\n[User Input (Summarized)]:\n{display_prompt}\n")
+        flush_print(f"\n[User Input (Partial)]:\n{display_prompt}\n")
         
         response = self.client.chat.completions.create(
             model=self.model_name,
@@ -141,7 +149,9 @@ class ForecasterAgent:
             previous_data=",".join([f"{v:.4f}" for v in current_window.flatten()])
         )
         
-        response = self.client.generate("You are a helpful forecasting assistant.", user_prompt, temperature=0.0, max_tokens=16384)
+        # Original: No special system prompt specified in paper for Forecaster, 
+        # using a neutral one to avoid bias not present in original study.
+        response = self.client.generate("You are a helpful assistant.", user_prompt, temperature=0.0, max_tokens=args.max_tokens if hasattr(args, "max_tokens") else 4096)
         
         if logger:
             logger.log_agent("Forecaster", user_prompt, response)
@@ -178,9 +188,9 @@ class RefinerAgent:
         
         user_prompt = f"Iteration {iteration}\nHistory:\n{history_str}\n\nDetailed Samples:\n{samples_str}"
         refiner_system = self.refiner_system_prompt.format(
-            it_plus_1=iteration, 
-            current_instructions_under_review=current_instructions, 
-            mae_to_report_to_teacher=history[-1]['mae'] if history else 0.0
+            it_plus_1=iteration + 1,
+            current_instructions_under_review=current_instructions,
+            mae_to_report_to_teacher=f"{history[-1]['mae']:.4f}" if history else "0.0"
         )
         refiner_output = self.client.generate(refiner_system, user_prompt, temperature=0.3, max_tokens=8192)
         

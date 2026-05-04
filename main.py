@@ -77,9 +77,9 @@ def main(args, initial_instructions=""):
         else:
             train_sample_size = min(int(args.sample_size), total_val_windows)
 
-        print(f"Starting ACL loop (Training on VAL) for {args.it} iterations with sample_size={train_sample_size}")
+        print(f"Starting ACL loop (Training on VAL) for {args.max_iter} iterations with sample_size={train_sample_size}")
         
-        for iteration in range(1, args.it + 1):
+        for iteration in range(1, args.max_iter + 1):
             print(f"\n--- Iteration {iteration} (ACL on Validation Set) ---")
             batch_results = []
             total_mae = 0
@@ -110,6 +110,14 @@ def main(args, initial_instructions=""):
             avg_mae = total_mae / train_sample_size
             print(f"Validation Average MAE: {avg_mae:.4f}")
             
+            # Paper's stopping criteria: ts_stopping_criteria (5%)
+            if history:
+                prev_mae = history[-1]['mae']
+                improvement = (prev_mae - avg_mae) / prev_mae
+                if improvement < args.tau_stop:
+                    print(f"Stopping early: Improvement {improvement:.2%} is less than threshold {args.tau_stop:.2%}")
+                    break
+
             history.append({
                 "instructions": current_instructions,
                 "mae": avg_mae
@@ -128,7 +136,7 @@ def main(args, initial_instructions=""):
             )
             
             if done:
-                print("Stopping early due to convergence.")
+                print("Stopping early due to Refiner Agent's 'Done' status.")
                 break
             current_instructions = next_instructions
 
@@ -208,6 +216,7 @@ if __name__ == "__main__":
             with open(library_path, 'r') as f:
                 initial_instructions = f.read().strip()
                 initial_instructions = initial_instructions.replace("{prediction_length}", str(args.pred_len))
+                initial_instructions = initial_instructions.replace("{sequence_length}", str(args.pred_len))
             print(f"Loaded initial ACL strategy: {args.prompt_type}")
 
     main(args, initial_instructions)

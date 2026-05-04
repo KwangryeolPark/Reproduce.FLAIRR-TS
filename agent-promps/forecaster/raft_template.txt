@@ -1,2 +1,3 @@
 The {raft_context} contains the M retrieved historical segments. Each segment and its corresponding ground-truth outcome are formatted as comma-separated text strings.
+
 {retrieved_segments_data}
